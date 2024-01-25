@@ -130,12 +130,7 @@ def main():
     tar_img = imread(tarimg_name)
 
 
-    u_list = sorted(glob.glob(os.path.join(imgs_path, 'u*.csv')))
-    v_list = sorted(glob.glob(os.path.join(imgs_path, 'v*.csv')))
-    u_name = u_list[0]
-    v_name = v_list[0]
-    u = np.array(pd.read_csv(u_name, header=None))
-    v = np.array(pd.read_csv(v_name, header=None))
+
 
 
     # Picture normalization 图片归一化
@@ -243,10 +238,10 @@ def main():
 
     # draw pictures
 
-    umin = np.min(u)
-    umax = np.max(u)
-    vmin = np.min(v)
-    vmax = np.max(v)
+    umin = np.min(disp_x)
+    umax = np.max(disp_x)
+    vmin = np.min(disp_y)
+    vmax = np.max(disp_y)
 
     plt.figure(1)
     re1 = plt.subplot(4, 2, 1)
