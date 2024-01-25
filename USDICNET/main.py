@@ -83,7 +83,7 @@ parser.add_argument('--weights', '-w', default=[0.24, 0.08, 0.05, 0.02, 0.24], t
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 rank = 0
-
+radius=2
 
 # rou = args.rou
 
@@ -274,7 +274,8 @@ def train_patch_shape2(input, model, optimizer, scheduler, device):
 
     # loss
     loss = torch.tensor(0).to(device)
-    r = 2
+    #r = 2
+    r = radius
     order = 2
 
     # （u=(XX.*COEFFS)*difs(u,x,y),v=(XX.*COEFFS)*difs(v,x,y)）
@@ -336,7 +337,8 @@ def train_patch_shape2_ori(input, model, optimizer, scheduler, device):
     dispv_xy = torch.cat([dispv, dispvx, dispvy, dispvxx, dispvxy, dispvyy], dim=1).squeeze(0)
     # loss
     loss = torch.tensor(0).to(device)
-    r = 2
+    #r = 2
+    r=radius
     order = 2
 
     # （u=(XX.*COEFFS)*difs(u,x,y),v=(XX.*COEFFS)*difs(v,x,y)）
