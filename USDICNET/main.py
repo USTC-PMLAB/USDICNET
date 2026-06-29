@@ -465,7 +465,7 @@ def main():
                         help='image normalisation factor (pixel/255 * factor)')
     parser.add_argument('--save-dir', default=None,
                         help='output directory (default: same as data-dir)')
-    parser.add_argument('--seed', type=int, default=None,
+    parser.add_argument('--seed', type=int, default=42,
                         help='random seed for reproducibility')
     parser.add_argument('--auto-retry', action='store_true', default=False,
                         help='enable adaptive lr retry on stalled convergence')
