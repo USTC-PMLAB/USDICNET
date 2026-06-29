@@ -1,99 +1,55 @@
+"""Basic layer builders for U-DICNet.
+
+These helpers are kept numerically identical to the original implementation;
+only formatting and docstrings have been cleaned up.
+"""
 import torch.nn as nn
 
+
 def conv(batchNorm, in_planes, out_planes, kernel_size=3, stride=1, drop=False):
+    """Conv -> [BN] -> [Dropout] -> LeakyReLU(0.1) block.
+
+    Args:
+        batchNorm: apply BatchNorm2d when True, otherwise use bias in Conv2d.
+        in_planes: input channel count.
+        out_planes: output channel count.
+        kernel_size: conv kernel size, padding is `(kernel_size - 1) // 2` to keep size.
+        stride: conv stride.
+        drop: add Dropout2d(0.4) when True.
     """
-    concolutional layer
-        args :
-            batchNorm(optional) : if true, batchNorm was applied
-            in_planes : the number of the input channel
-            out_planes : the number of the output channel
-            kernel_size :  the kernel size of the convolutional layer
-            stride : the stride of the convolution
-            drop(optional) : if true, dropout was applied
-        Returns:
-            Sequential of operation
-    """
+    padding = (kernel_size - 1) // 2
+    layers = [nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size,
+                        stride=stride, padding=padding, bias=not batchNorm)]
+    if batchNorm:
+        layers.append(nn.BatchNorm2d(out_planes))
     if drop:
-        if batchNorm:
-            return nn.Sequential(
-                nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=(kernel_size - 1) // 2,
-                          bias=False),
-                nn.BatchNorm2d(out_planes),
-                nn.Dropout2d(0.4),
-                nn.LeakyReLU(0.1, inplace=True)
-            )
-        else:
-            return nn.Sequential(
-                nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=(kernel_size - 1) // 2,
-                          bias=True),
-                nn.Dropout2d(0.4),
-                nn.LeakyReLU(0.1, inplace=True)
-            )
-    else:
-        if batchNorm:
-            return nn.Sequential(
-                nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=(kernel_size - 1) // 2,
-                          bias=False),
-                nn.BatchNorm2d(out_planes),
-                nn.LeakyReLU(0.1, inplace=True)
-            )
-        else:
-            return nn.Sequential(
-                nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=(kernel_size - 1) // 2,
-                          bias=True),
-                nn.LeakyReLU(0.1, inplace=True)
-            )
+        layers.append(nn.Dropout2d(0.4))
+    layers.append(nn.LeakyReLU(0.1, inplace=True))
+    return nn.Sequential(*layers)
 
 
 def predict_flow(in_planes, out_planes, drop=False):
-    """
-    convolutional layer for prediction
-    default kernel size: 3
-    default stride : 1
-        args :
-            in_planes : the number of the input channel
-            out_planes : the number of the output channel
-            drop(optional) : if true, dropout was applied
-        Returns:
-            Sequential of operation in convolutional layer for prediction
-    """
+    """1x1-ish prediction conv (kernel 3, stride 1, pad 1, no bias)."""
     if drop:
-        return nn.Sequential(nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=1, padding=1, bias=False),
-                             nn.Dropout2d(0.4))
-    else:
-        return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=1, padding=1, bias=False)
-
+        return nn.Sequential(
+            nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.Dropout2d(0.4),
+        )
+    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=1, padding=1, bias=False)
 
 
 def deconv(in_planes, out_planes, stride=2, drop=False):
-    """
-    deconvolutional layer
-    default kernel size: 4
-        args :
-            in_planes : the number of the input channel
-            out_planes : the number of the output channel
-            stride : the stride of the convolution
-            drop(optional) : if true, dropout was applied
-        Returns:
-            Sequential of operation in deconvolutional layer
-    """
+    """Transposed conv (kernel 4, pad 1) -> [Dropout] -> LeakyReLU(0.1)."""
+    layers = [nn.ConvTranspose2d(in_planes, out_planes, kernel_size=4,
+                                  stride=stride, padding=1, bias=False)]
     if drop:
-        return nn.Sequential(
-            nn.ConvTranspose2d(in_planes, out_planes, kernel_size=4, stride=stride, padding=1, bias=False),
-            nn.Dropout2d(0.4),
-            nn.LeakyReLU(0.1, inplace=True)
-        )
-    else:
-        return nn.Sequential(
-            nn.ConvTranspose2d(in_planes, out_planes, kernel_size=4, stride=stride, padding=1, bias=False),
-            nn.LeakyReLU(0.1, inplace=True)
-        )
+        layers.append(nn.Dropout2d(0.4))
+    layers.append(nn.LeakyReLU(0.1, inplace=True))
+    return nn.Sequential(*layers)
 
 
 def crop_like(input_img, target):
-
-    if input_img.size()[2:] == target.size()[2:]:  # 输入图像的数据张量第一维是凑数的空维或者样本数，2是层数或者通道数，
-        # 3，4，5则是体图像的尺寸大小，此处是判断图像大小是否一致
+    """Crop ``input_img`` spatial dims to match ``target`` when they differ."""
+    if input_img.size()[2:] == target.size()[2:]:
         return input_img
-    else:
-        return input_img[:, :, :target.size(2), :target.size(3)]
+    return input_img[:, :, :target.size(2), :target.size(3)]
