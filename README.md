@@ -51,8 +51,7 @@ python main.py --data-dir ./gauss_displacement
 | `U_DICNet` | 2 (u, v) | `patch_grad` |
 | `U_DICNet_shape2` | 12 (u,v + 1st/2nd derivatives) | `patch12` |
 
-## pretrained model
-The pretrained model of U_DICNet are avaliable at [google drive](https://drive.google.com/file/d/1vtCL7nBXYUPYgWmKGc2iuZGEb4zFY5md/view?usp=share_link) and [百度云盘](https://pan.baidu.com/s/1N99rpZ7-OOgSm6SAvOUo9A?pwd=76tk)
+
 
 
 ## Convergence & reproducibility
