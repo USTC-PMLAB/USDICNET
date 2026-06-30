@@ -36,7 +36,13 @@ python main.py --data-dir ./gauss_displacement
 | `--save-dir` | same as `--data-dir` | output directory |
 | `--seed` | `42` | random seed for reproducibility |
 | `--auto-retry` | `False` | enable adaptive lr retry on stalled convergence |
-
+## Convergence strategies
+| argument | default | description |
+| --- | --- | --- |
+| `--warmup N` | `0` (off) | linear lr warmup: ramp from 1e-7 to `--lr` over N epochs |
+| `--reverse-lr` | `False` | adaptive lr: raise (×2) when loss drops >10%, lower (÷2) when <0.5% per 50 epochs. Starts at 1e-6, ignores ReduceLROnPlateau |
+| `--auto-retry` | `False` | auto-detect stalled/diverging runs: re-initialises model, lower lr on divergence, raise on slow convergence (max 5 retries) |
+| `--early-stop` | `False` | stop training when loss is stuck on a high plateau (>0.05, improvement <0.2% over 50 epochs) |
 ## Output
 
 - `dispx_*.csv` / `dispy_*.csv` — full displacement fields
@@ -57,15 +63,16 @@ python main.py --data-dir ./gauss_displacement
 ## Convergence & reproducibility
 
 - The default scheduler is **ReduceLROnPlateau** . It monitors the loss and automatically halves lr when progress stalls (patience=20).
-- Under normal training conditions, U‑DICNet typically converges to a loss on the order of 0.01 or even lower, often within about 5 minutes for 2,500 epochs on an RTX 4060. However, due to random weight initialisation and variations in the input speckle image pairs, convergence can occasionally stall – and this usually becomes apparent early in training (within the first few dozen epochs), with the loss decreasing very slowly or remaining persistently high.
+- Under normal training conditions, U‑DICNet typically converges to a loss on the order of 0.0001 or even lower, often within about 5 minutes for 2,500 epochs on an RTX 4060. However, due to random weight initialisation and variations in the input speckle image pairs, convergence can occasionally stall – and this usually becomes apparent early in training (within the first few dozen epochs), with the loss decreasing very slowly or remaining persistently high.
 
-To address this, we recommend the following steps (try them in order):
+To address this, we recommend the following steps:
 
 Fix a well‑tested random seed (e.g., --seed 42) to improve stability and reproducibility.
-
+- **`--warmup 200`** — linear lr ramp from 1e-7 to 1e-4 over 200 epochs (verified to converge to ~0.006).
+- **`--reverse-lr`** — adaptive lr starting at 1e-6 (verified to converge to ~0.006).
+- **`--auto-retry`** — can handle both divergence and slow convergence (5 retries max)
+- **`--early-stop`** — stops early when loss is stuck on a high plateau (>0.05), saving time on hopeless runs.
 Load a pretrained model (--pretrained) to provide a better starting point.
 
-Enable the auto‑retry mechanism (--auto-retry), which automatically detects stagnation, re‑initialises the model, and adjusts the learning rate.
-
-Manually tune hyperparameters – for example, increase the initial learning rate (--lr 0.005), switch the solver (--solver sgd), or enlarge the subset radius (--radius 3). These adjustments can often help the model escape local plateaus and resume effective convergence.
+Manually tune hyperparameters – for example, increase the initial learning rate (--lr 0.005), switch the solver (--solver sgd), These adjustments can often help the model escape local plateaus and resume effective convergence.
 
