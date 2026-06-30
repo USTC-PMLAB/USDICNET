@@ -233,13 +233,46 @@ def build_optimizer(model, lr, args):
 # main training loop (with adaptive lr retry)
 # ---------------------------------------------------------------------------
 def train_loop(input_tensor, model, args, device, optimizer, scheduler):
-    """Core training loop (ReduceLROnPlateau, identical to original algorithm)."""
+    """Core training loop with optional warmup, reverse-lr, and early stopping.
+
+    ``--warmup N``: linearly ramp lr from 1e-7 to ``--lr`` over N epochs.
+    ``--reverse-lr``: every 50 epochs raise lr on >10% improvement, lower on <0.5%
+    ``--early-stop``: stop if high-plateau loss stalls > 50 epochs.
+    """
     input_tensor = input_tensor.to(device)
     input_ref = input_tensor[0, 0, :, :].unsqueeze(0).unsqueeze(0)
     input_tar = input_tensor[0, 1, :, :].unsqueeze(0).unsqueeze(0)
 
+    use_warmup = getattr(args, 'warmup', 0) or 0
+    use_reverse_lr = getattr(args, 'reverse_lr', False)
+    use_early_stop = getattr(args, 'early_stop', False)
+    target_lr = args.lr
+
+    # warmup
+    warmup_start_lr = 1e-7
+
+    # reverse-lr
+    rev_check_interval = 50
+    rev_max_lr = 1e-3
+    rev_min_lr = 1e-7
+
+    # early-stop
+    early_stop_patience = 50
+    early_stop_threshold = 0.002
+    early_stop_min_epochs = 150
+    early_stop_loss_floor = 0.05
+    loss_history = []
+
     loss_val = 0.0
+    prev_best_loss = None
+
     for epoch in range(args.start_epoch, args.epochs):
+        # --- warmup: linear ramp ---
+        if use_warmup and epoch < use_warmup:
+            wu_lr = warmup_start_lr + (target_lr - warmup_start_lr) * (epoch / use_warmup)
+            for pg in optimizer.param_groups:
+                pg['lr'] = wu_lr
+
         model.train()
         disp = model(input_tensor)
 
@@ -249,14 +282,60 @@ def train_loop(input_tensor, model, args, device, optimizer, scheduler):
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
-        scheduler.step(loss)
+
+        # --- scheduler ---
+        if use_reverse_lr:
+            # reverse-lr manages lr manually; skip ReduceLROnPlateau
+            pass
+        elif not use_warmup or epoch >= use_warmup:
+            # after warmup, let ReduceLROnPlateau take over
+            scheduler.step(loss)
+        else:
+            # during warmup, don't let scheduler see the loss
+            pass
 
         loss_val = loss.item()
+        if use_early_stop:
+            loss_history.append(loss_val)
         args.writer.add_scalar('loss', loss_val, epoch)
 
+        current_lr = optimizer.param_groups[0]['lr']
+
+        # --- reverse-lr: adaptive adjustment ---
+        if use_reverse_lr and epoch > 0 and epoch % rev_check_interval == 0:
+            if prev_best_loss is not None:
+                improvement = (prev_best_loss - loss_val) / prev_best_loss
+                if improvement > 0.10:
+                    new_lr = min(current_lr * 2, rev_max_lr)
+                    for pg in optimizer.param_groups:
+                        pg['lr'] = new_lr
+                    print(f"  [reverse-lr] improvement {improvement*100:.1f}% > 10%  "
+                          f"lr {current_lr:.2e} -> {new_lr:.2e}")
+                elif improvement < 0.005:
+                    new_lr = max(current_lr * 0.5, rev_min_lr)
+                    for pg in optimizer.param_groups:
+                        pg['lr'] = new_lr
+                    print(f"  [reverse-lr] improvement {improvement*100:.1f}% < 0.5%  "
+                          f"lr {current_lr:.2e} -> {new_lr:.2e}")
+                else:
+                    print(f"  [reverse-lr] improvement {improvement*100:.1f}% — keep lr {current_lr:.2e}")
+            prev_best_loss = loss_val
+
         if epoch % 10 == 0:
-            current_lr = optimizer.param_groups[0]['lr']
             print(f"epoch {epoch:5d}  lr {current_lr:.2e}  loss {loss_val:.6f}")
+
+        # --- early-stop ---
+        if use_early_stop and epoch >= early_stop_min_epochs and \
+           len(loss_history) >= early_stop_patience + 20:
+            old_loss = np.mean(loss_history[-early_stop_patience - 20:-early_stop_patience])
+            recent_loss = np.mean(loss_history[-20:])
+            if recent_loss >= early_stop_loss_floor:
+                improvement = (old_loss - recent_loss) / old_loss
+                if improvement < early_stop_threshold:
+                    print(f"early stop at epoch {epoch}: improvement {improvement*100:.2f}% "
+                          f"< {early_stop_threshold*100:.2f}% "
+                          f"(loss {old_loss:.6f} -> {recent_loss:.6f})")
+                    break
 
     return loss_val
 
@@ -265,11 +344,19 @@ def train_loop(input_tensor, model, args, device, optimizer, scheduler):
 # adaptive lr retry variant (optional, enabled via --auto-retry)
 # ---------------------------------------------------------------------------
 def train_loop_retry(input_tensor, model_factory, args, device):
-    """Training loop that auto-detects stalled convergence and re-initialises
-    with a doubled learning rate (up to max_retries times)."""
+    """Adaptive retry: distinguishes divergence from slow convergence.
+
+    After each check_interval:
+      - loss rose (>10%): divergence → divide lr by 4, re-init
+      - loss dropped but < threshold: slow convergence → double lr, re-init
+      - loss dropped >= threshold: OK, continue full training
+    """
     check_interval = 100
-    threshold = 0.80       # first 100 epochs must drop >= 80% from initial loss
-    max_retries = 3
+    diverge_threshold = -0.10   # loss rose > 10% → diverging
+    converge_threshold = 0.80   # loss dropped >= 80% → good convergence
+    max_retries = 5
+    min_lr = 1e-8
+    max_lr = 1e-2
 
     input_tensor = input_tensor.to(device)
     input_ref = input_tensor[0, 0, :, :].unsqueeze(0).unsqueeze(0)
@@ -277,8 +364,7 @@ def train_loop_retry(input_tensor, model_factory, args, device):
 
     current_lr = args.lr
     retry = 0
-    optimizer = None
-    scheduler = None
+    last_action = None       # 'diverged' or 'slow', to avoid oscillation
 
     while True:
         model = model_factory().to(device)
@@ -286,7 +372,7 @@ def train_loop_retry(input_tensor, model_factory, args, device):
         initial_loss = None
 
         print(f"\n{'*'*60}")
-        print(f"  retry {retry}/{max_retries}  lr = {current_lr:.2e}  model = {args.arch}")
+        print(f"  retry {retry}/{max_retries}  lr = {current_lr:.2e}  arch = {args.arch}")
         print(f"{'*'*60}")
 
         epoch_offset = retry * check_interval
@@ -316,18 +402,37 @@ def train_loop_retry(input_tensor, model_factory, args, device):
                 print(f"epoch {global_epoch:5d}  lr {current_lr_val:.2e}  loss {loss_val:.6f}")
 
         improvement = (initial_loss - loss_val) / initial_loss
-        if improvement >= threshold:
-            print(f"[retry {retry}] converged: loss {initial_loss:.4f} -> {loss_val:.4f}  "
-                  f"(delta = {improvement*100:.1f}% >= {threshold*100:.0f}%)  OK  continue training\n")
+
+        if improvement >= converge_threshold:
+            print(f"[retry {retry}] OK: loss {initial_loss:.4f} -> {loss_val:.4f}  "
+                  f"(delta = {improvement*100:.1f}% >= {converge_threshold*100:.0f}%)  continue training\n")
             break
-        else:
-            print(f"[retry {retry}] stalled:   loss {initial_loss:.4f} -> {loss_val:.4f}  "
-                  f"(delta = {improvement*100:.1f}% < {threshold*100:.0f}%)  FAIL")
+
+        elif improvement < diverge_threshold:
+            print(f"[retry {retry}] DIVERGE: loss {initial_loss:.4f} -> {loss_val:.4f}  "
+                  f"(delta = {improvement*100:.1f}% < {diverge_threshold*100:.0f}%)")
             retry += 1
             if retry > max_retries:
                 print(f"[ERROR] max retries ({max_retries}) reached.  Training may not converge.")
                 break
-            current_lr *= 2.0
+            if last_action != 'diverged':
+                current_lr = max(current_lr / 4.0, min_lr)
+            else:
+                current_lr = max(current_lr / 2.0, min_lr)  # already diverging, smaller reduction
+            last_action = 'diverged'
+
+        else:
+            print(f"[retry {retry}] SLOW: loss {initial_loss:.4f} -> {loss_val:.4f}  "
+                  f"(delta = {improvement*100:.1f}%, {diverge_threshold*100:.0f}% ~ {converge_threshold*100:.0f}%)")
+            retry += 1
+            if retry > max_retries:
+                print(f"[WARNING] max retries ({max_retries}) reached, continuing anyway.")
+                break
+            if last_action != 'slow':
+                current_lr = min(current_lr * 2.0, max_lr)
+            else:
+                current_lr = min(current_lr * 1.5, max_lr)  # already slow, gentler increase
+            last_action = 'slow'
 
     remaining = args.epochs - (retry * check_interval + check_interval)
     if remaining > 0:
@@ -448,7 +553,7 @@ def main():
 
     # --- solver ---
     parser.add_argument('--solver', default='adam', choices=['adam', 'sgd'])
-    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--beta', type=float, default=0.999)
     parser.add_argument('--weight-decay', type=float, default=4e-4)
@@ -469,7 +574,12 @@ def main():
                         help='random seed for reproducibility')
     parser.add_argument('--auto-retry', action='store_true', default=False,
                         help='enable adaptive lr retry on stalled convergence')
-
+    parser.add_argument('--warmup', type=int, default=0, metavar='N',
+                        help='linear lr warmup from 1e-7 to target lr over N epochs (0=off)')
+    parser.add_argument('--reverse-lr', action='store_true', default=False,
+                        help='adaptive lr: raise on fast improvement, lower on plateau (ignores ReduceLROnPlateau)')
+    parser.add_argument('--early-stop', action='store_true', default=False,
+                        help='enable early stopping when loss plateaus')
     args = parser.parse_args()
 
     # seed for reproducibility
@@ -513,7 +623,14 @@ def main():
         model_factory = lambda: build_model(args.arch, args.pretrained, device)
         final_loss, model = train_loop_retry(input_tensor, model_factory, args, device)
     else:
-        optimizer, scheduler = build_optimizer(model, args.lr, args)
+        init_lr = args.lr
+        if args.warmup > 0:
+            init_lr = 1e-7  # warmup starts from tiny lr
+            print(f"[warmup] enabled: {args.warmup} epochs, lr 1e-7 -> {args.lr:.0e}")
+        if args.reverse_lr:
+            init_lr = 1e-6  # reverse-lr starts conservative
+            print("[reverse-lr] enabled: adaptive lr, ignores ReduceLROnPlateau")
+        optimizer, scheduler = build_optimizer(model, init_lr, args)
         final_loss = train_loop(input_tensor, model, args, device, optimizer, scheduler)
     elapsed = time.time() - start
     print(f"training finished in {elapsed:.1f}s, final loss = {final_loss:.6f}")
