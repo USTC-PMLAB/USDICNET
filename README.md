@@ -31,7 +31,7 @@ python main.py --data-dir ./gauss_displacement
 | `--lr` | `0.001` | initial learning rate |
 | `--epochs` | `2500` | total epochs |
 | `--radius` | `2` | subset radius (pixels) |
-| `--order` | `2` | Taylor expansion order |
+| `--order` | `2` | shape function order |
 | `--norm-factor` | `10.0` | image normalisation = pixel / 255 × factor |
 | `--save-dir` | same as `--data-dir` | output directory |
 | `--seed` | `42` | random seed for reproducibility |
@@ -60,7 +60,7 @@ python main.py --data-dir ./gauss_displacement
 
 
 
-## Convergence & reproducibility
+## Convergence
 
 - The default scheduler is **ReduceLROnPlateau** . It monitors the loss and automatically halves lr when progress stalls (patience=20).
 - Under normal training conditions, U‑DICNet typically converges to a loss on the order of 0.0001 or even lower, often within about 5 minutes for 2,500 epochs on an RTX 4060. However, due to random weight initialisation and variations in the input speckle image pairs, convergence can occasionally stall – and this usually becomes apparent early in training (within the first few dozen epochs), with the loss decreasing very slowly or remaining persistently high.
